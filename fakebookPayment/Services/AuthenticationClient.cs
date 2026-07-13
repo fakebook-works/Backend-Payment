@@ -28,6 +28,7 @@ public sealed class AuthenticationClient(HttpClient httpClient, IOptions<Authent
     {
         using var document = await SendAsync(StateQuery, new { userId = userId.ToString() }, cancellationToken);
         var state = document.RootElement.GetProperty("data").GetProperty("paymentPremiumState");
+        EnsureMatchingUser(state, userId);
         return state.GetProperty("validDate").ValueKind == JsonValueKind.Null
             ? null
             : state.GetProperty("validDate").GetDateTimeOffset();
@@ -37,6 +38,7 @@ public sealed class AuthenticationClient(HttpClient httpClient, IOptions<Authent
     {
         using var document = await SendAsync(SetMutation, new { input = new { userId = userId.ToString(), validDate } }, cancellationToken);
         var state = document.RootElement.GetProperty("data").GetProperty("setPaymentValidDate");
+        EnsureMatchingUser(state, userId);
         var storedValidDate = state.GetProperty("validDate").GetDateTimeOffset();
         if (storedValidDate < validDate)
             throw new InvalidOperationException("Authentication did not persist the requested Premium validity.");
@@ -59,5 +61,13 @@ public sealed class AuthenticationClient(HttpClient httpClient, IOptions<Authent
             throw new InvalidOperationException("Authentication rejected the internal payment operation.");
         }
         return document;
+    }
+
+    private static void EnsureMatchingUser(JsonElement state, long expectedUserId)
+    {
+        var returned = state.GetProperty("userId");
+        var returnedUserId = returned.ValueKind == JsonValueKind.String ? returned.GetString() : returned.GetRawText();
+        if (!string.Equals(returnedUserId, expectedUserId.ToString(), StringComparison.Ordinal))
+            throw new InvalidOperationException("Authentication returned a different user identity.");
     }
 }

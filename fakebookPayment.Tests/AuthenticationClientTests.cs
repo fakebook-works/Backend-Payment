@@ -39,6 +39,21 @@ public sealed class AuthenticationClientTests
         Assert.Equal(target, request.RootElement.GetProperty("variables").GetProperty("input").GetProperty("validDate").GetDateTimeOffset());
     }
 
+    [Fact]
+    public async Task Premium_state_rejects_a_different_returned_user()
+    {
+        var client = Create(new RecordingHandler("""{"data":{"paymentPremiumState":{"userId":"43","validDate":null}}}"""));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetValidDateAsync(42, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Valid_date_update_rejects_a_different_returned_user()
+    {
+        var target = new DateTimeOffset(2026, 8, 13, 12, 0, 0, TimeSpan.Zero);
+        var client = Create(new RecordingHandler("""{"data":{"setPaymentValidDate":{"userId":"43","validDate":"2026-08-13T12:00:00Z"}}}"""));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SetValidDateAsync(42, target, CancellationToken.None));
+    }
+
     private static AuthenticationClient Create(HttpMessageHandler handler) => new(
         new HttpClient(handler),
         Options.Create(new AuthenticationOptions

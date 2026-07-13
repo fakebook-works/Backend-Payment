@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Dapper;
 using Fakebook.Payment.Services;
@@ -19,6 +20,7 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
 {
     private const string GatewaySecret = "01234567890123456789012345678901";
     private const string ChecksumKey = "test-checksum-key";
+    private static readonly DateTimeOffset FixedNow = new(2026, 7, 13, 12, 0, 0, TimeSpan.Zero);
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine")
         .WithDatabase("webhook_tests").WithUsername("postgres").WithPassword("postgres").Build();
     private WebApplicationFactory<global::Program> _factory = null!;
@@ -46,7 +48,9 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IAuthenticationClient>();
+                services.RemoveAll<TimeProvider>();
                 services.AddSingleton<IAuthenticationClient>(_authentication);
+                services.AddSingleton<TimeProvider>(new FixedTimeProvider(FixedNow));
             });
         });
         _client = _factory.CreateClient();
@@ -105,7 +109,7 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
 
         await using var connection = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
         Assert.Equal(1, _authentication.SetCalls);
-        Assert.NotNull(_authentication.LastValidDate);
+        Assert.Equal(FixedNow.AddMonths(1), _authentication.LastValidDate);
         Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.payment_transaction WHERE provider_reference='reference-1'"));
         Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.outbox_message WHERE order_id=100"));
         Assert.Equal("ACTIVATED", await connection.ExecuteScalarAsync<string>("SELECT status FROM payment.payment_order WHERE id=100"));
@@ -127,6 +131,27 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
         Assert.Equal(0, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.outbox_message WHERE order_id=100"));
         Assert.Equal("PENDING", await connection.ExecuteScalarAsync<string>("SELECT status FROM payment.payment_order WHERE id=100"));
         Assert.Equal(0, _authentication.SetCalls);
+    }
+
+    [Fact]
+    public async Task Authentication_retry_reuses_the_same_absolute_target_date()
+    {
+        const long orderCode = 888888;
+        _authentication.FailuresRemaining = 1;
+        await SeedPendingOrderAsync(orderCode, 111, "payment-link-4", 500_000, "YEARLY");
+        var webhook = await CreateSignedWebhookAsync(orderCode, 500_000, "payment-link-4", "reference-4");
+
+        using var response = await SendWebhookAsync(webhook);
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        await WaitUntilAsync(async () =>
+        {
+            await using var pollingConnection = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+            return await pollingConnection.ExecuteScalarAsync<string>("SELECT status FROM payment.payment_order WHERE id=100") == "ACTIVATED";
+        });
+        Assert.Equal(2, _authentication.SetCalls);
+        Assert.Equal(2, _authentication.Targets.Count);
+        Assert.All(_authentication.Targets, target => Assert.Equal(FixedNow.AddYears(1), target));
     }
 
     [Fact]
@@ -227,15 +252,25 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
     private sealed class FakeAuthenticationClient : IAuthenticationClient
     {
         private int _setCalls;
+        private int _failuresRemaining;
         public int SetCalls => Volatile.Read(ref _setCalls);
-        public DateTimeOffset? LastValidDate { get; private set; }
+        public int FailuresRemaining { set => Volatile.Write(ref _failuresRemaining, value); }
+        public ConcurrentQueue<DateTimeOffset> Targets { get; } = new();
+        public DateTimeOffset? LastValidDate => Targets.TryPeek(out var value) ? value : null;
         public Task<DateTimeOffset?> GetValidDateAsync(long userId, CancellationToken cancellationToken) => Task.FromResult<DateTimeOffset?>(null);
         public Task SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken)
         {
-            LastValidDate = validDate;
+            Targets.Enqueue(validDate);
             Interlocked.Increment(ref _setCalls);
+            if (Interlocked.Decrement(ref _failuresRemaining) >= 0)
+                throw new HttpRequestException("Injected Authentication outage.");
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     public async Task DisposeAsync()
