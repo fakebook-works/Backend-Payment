@@ -1,6 +1,15 @@
+using System.Net.Http.Json;
+using System.Text.Json;
+using Dapper;
+using Fakebook.Payment.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Npgsql;
+using PayOS;
+using PayOS.Models.Webhooks;
 using Testcontainers.PostgreSql;
 
 namespace fakebookPayment.Tests;
@@ -12,11 +21,13 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
         .WithDatabase("webhook_tests").WithUsername("postgres").WithPassword("postgres").Build();
     private WebApplicationFactory<global::Program> _factory = null!;
     private HttpClient _client = null!;
+    private readonly FakeAuthenticationClient _authentication = new();
 
     public async Task InitializeAsync()
     {
         await _postgres.StartAsync();
         _factory = new WebApplicationFactory<global::Program>().WithWebHostBuilder(builder =>
+        {
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
@@ -29,7 +40,13 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
                     ["Authentication:PaymentSecret"] = "11234567890123456789012345678901",
                     ["Payment:PublicBaseUrl"] = "http://localhost:3000",
                     ["Payment:FrontendPublicUrl"] = "http://localhost:3000"
-                })));
+                }));
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IAuthenticationClient>();
+                services.AddSingleton<IAuthenticationClient>(_authentication);
+            });
+        });
         _client = _factory.CreateClient();
     }
 
@@ -63,6 +80,126 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
         request.Headers.Add("X-Gateway-Secret", GatewaySecret);
         using var response = await _client.SendAsync(request);
         Assert.Equal(System.Net.HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Valid_sdk_signed_webhook_activates_once_and_replay_is_idempotent()
+    {
+        const long orderCode = 123456;
+        await SeedPendingOrderAsync(orderCode, 77, "payment-link-1", 52_000, "MONTHLY");
+        var webhook = await CreateSignedWebhookAsync(orderCode, 52_000, "payment-link-1", "reference-1");
+
+        using var first = await SendWebhookAsync(webhook);
+        using var replay = await SendWebhookAsync(webhook);
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.OK, replay.StatusCode);
+        await WaitUntilAsync(() => _authentication.SetCalls == 1 && _authentication.LastValidDate is not null);
+
+        await using var connection = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.payment_transaction WHERE provider_reference='reference-1'"));
+        Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.outbox_message WHERE order_id=100"));
+        Assert.Equal("ACTIVATED", await connection.ExecuteScalarAsync<string>("SELECT status FROM payment.payment_order WHERE id=100"));
+    }
+
+    [Fact]
+    public async Task Invalid_payos_signature_changes_no_payment_state()
+    {
+        const long orderCode = 654321;
+        await SeedPendingOrderAsync(orderCode, 88, "payment-link-2", 500_000, "YEARLY");
+        var webhook = await CreateSignedWebhookAsync(orderCode, 500_000, "payment-link-2", "reference-2");
+        webhook.Signature = new string('0', 64);
+
+        using var response = await SendWebhookAsync(webhook);
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+        await using var connection = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.payment_transaction WHERE provider_reference='reference-2'"));
+        Assert.Equal("PENDING", await connection.ExecuteScalarAsync<string>("SELECT status FROM payment.payment_order WHERE id=100"));
+    }
+
+    private async Task SeedPendingOrderAsync(long orderCode, long userId, string paymentLinkId, long amount, string plan)
+    {
+        await using var connection = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        await connection.ExecuteAsync("""
+            INSERT INTO payment.payment_order
+              (id, order_code, user_id, plan, amount, currency, status, provider_payment_link_id, checkout_url, expires_at)
+            VALUES (100, @OrderCode, @UserId, @Plan, @Amount, 'VND', 'PENDING', @PaymentLinkId,
+                    'https://pay.payos.vn/test', now() + interval '30 minutes');
+            """, new { OrderCode = orderCode, UserId = userId, Plan = plan, Amount = amount, PaymentLinkId = paymentLinkId });
+    }
+
+    private static Task<Webhook> CreateSignedWebhookAsync(long orderCode, long amount, string paymentLinkId, string reference)
+    {
+        const string checksumKey = "test-checksum-key";
+        var data = new WebhookData
+        {
+            OrderCode = orderCode,
+            Amount = amount,
+            Description = $"FB PRM {orderCode}",
+            AccountNumber = "123456789",
+            Reference = reference,
+            TransactionDateTime = "2026-07-13 12:00:00",
+            Currency = "VND",
+            PaymentLinkId = paymentLinkId,
+            Code = "00",
+            Description2 = "Thành công",
+            CounterAccountBankId = string.Empty,
+            CounterAccountBankName = string.Empty,
+            CounterAccountName = string.Empty,
+            CounterAccountNumber = string.Empty,
+            VirtualAccountName = string.Empty,
+            VirtualAccountNumber = string.Empty
+        };
+        var client = new PayOSClient(new global::PayOS.PayOSOptions
+        {
+            ClientId = "test-client",
+            ApiKey = "test-api-key",
+            ChecksumKey = checksumKey
+        });
+        return Task.FromResult(new Webhook
+        {
+            Code = "00",
+            Description = "success",
+            Success = true,
+            Data = data,
+            Signature = client.Crypto.CreateSignatureFromObject(data, checksumKey) ??
+                        throw new InvalidOperationException("PayOS SDK did not create a test signature.")
+        });
+    }
+
+    private async Task<HttpResponseMessage> SendWebhookAsync(Webhook webhook)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/internal/webhooks/payos")
+        {
+            Content = JsonContent.Create(webhook)
+        };
+        request.Headers.Add("X-Gateway-Secret", GatewaySecret);
+        return await _client.SendAsync(request);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            if (DateTimeOffset.UtcNow >= deadline) throw new TimeoutException("Activation worker did not finish in time.");
+            await Task.Delay(100);
+        }
+    }
+
+    private sealed class FakeAuthenticationClient : IAuthenticationClient
+    {
+        private int _setCalls;
+        public int SetCalls => Volatile.Read(ref _setCalls);
+        public DateTimeOffset? LastValidDate { get; private set; }
+        public Task<DateTimeOffset?> GetValidDateAsync(long userId, CancellationToken cancellationToken) => Task.FromResult<DateTimeOffset?>(null);
+        public Task SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken)
+        {
+            LastValidDate = validDate;
+            Interlocked.Increment(ref _setCalls);
+            return Task.CompletedTask;
+        }
     }
 
     public async Task DisposeAsync()
