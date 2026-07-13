@@ -1,3 +1,9 @@
 using Xunit;
 
-[assembly: CollectionBehavior(DisableTestParallelization = true)]
+namespace fakebookPayment.Tests;
+
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class PostgreSqlIntegrationCollection
+{
+    public const string Name = "PostgreSQL integration";
+}

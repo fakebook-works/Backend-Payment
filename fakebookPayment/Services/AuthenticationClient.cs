@@ -26,7 +26,7 @@ public sealed class AuthenticationClient(HttpClient httpClient, IOptions<Authent
 
     public async Task<DateTimeOffset?> GetValidDateAsync(long userId, CancellationToken cancellationToken)
     {
-        using var document = await SendAsync(StateQuery, new { userId }, cancellationToken);
+        using var document = await SendAsync(StateQuery, new { userId = userId.ToString() }, cancellationToken);
         var state = document.RootElement.GetProperty("data").GetProperty("paymentPremiumState");
         return state.GetProperty("validDate").ValueKind == JsonValueKind.Null
             ? null
@@ -35,7 +35,7 @@ public sealed class AuthenticationClient(HttpClient httpClient, IOptions<Authent
 
     public async Task SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken)
     {
-        using var document = await SendAsync(SetMutation, new { input = new { userId, validDate } }, cancellationToken);
+        using var document = await SendAsync(SetMutation, new { input = new { userId = userId.ToString(), validDate } }, cancellationToken);
         var state = document.RootElement.GetProperty("data").GetProperty("setPaymentValidDate");
         var storedValidDate = state.GetProperty("validDate").GetDateTimeOffset();
         if (storedValidDate < validDate)

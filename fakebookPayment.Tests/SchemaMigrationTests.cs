@@ -4,6 +4,7 @@ using Testcontainers.PostgreSql;
 
 namespace fakebookPayment.Tests;
 
+[Collection(PostgreSqlIntegrationCollection.Name)]
 public sealed class SchemaMigrationTests
 {
     [Fact]

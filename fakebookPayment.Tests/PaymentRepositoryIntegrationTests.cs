@@ -7,6 +7,7 @@ using Testcontainers.PostgreSql;
 
 namespace fakebookPayment.Tests;
 
+[Collection(PostgreSqlIntegrationCollection.Name)]
 public sealed class PaymentRepositoryIntegrationTests : IAsyncLifetime
 {
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine")

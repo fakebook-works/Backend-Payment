@@ -14,9 +14,11 @@ using Testcontainers.PostgreSql;
 
 namespace fakebookPayment.Tests;
 
+[Collection(PostgreSqlIntegrationCollection.Name)]
 public sealed class WebhookEndpointTests : IAsyncLifetime
 {
     private const string GatewaySecret = "01234567890123456789012345678901";
+    private const string ChecksumKey = "test-checksum-key";
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine")
         .WithDatabase("webhook_tests").WithUsername("postgres").WithPassword("postgres").Build();
     private WebApplicationFactory<global::Program> _factory = null!;
@@ -34,7 +36,7 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
                     ["ConnectionStrings:PaymentDatabase"] = _postgres.GetConnectionString(),
                     ["PayOS:ClientId"] = "test-client",
                     ["PayOS:ApiKey"] = "test-api-key",
-                    ["PayOS:ChecksumKey"] = "test-checksum-key",
+                    ["PayOS:ChecksumKey"] = ChecksumKey,
                     ["Gateway:SharedSecret"] = GatewaySecret,
                     ["Authentication:Endpoint"] = "http://localhost:59999/graphql",
                     ["Authentication:PaymentSecret"] = "11234567890123456789012345678901",
@@ -89,14 +91,21 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
         await SeedPendingOrderAsync(orderCode, 77, "payment-link-1", 52_000, "MONTHLY");
         var webhook = await CreateSignedWebhookAsync(orderCode, 52_000, "payment-link-1", "reference-1");
 
-        using var first = await SendWebhookAsync(webhook);
-        using var replay = await SendWebhookAsync(webhook);
+        var responses = await Task.WhenAll(SendWebhookAsync(webhook), SendWebhookAsync(webhook));
+        using var first = responses[0];
+        using var replay = responses[1];
 
         Assert.Equal(System.Net.HttpStatusCode.OK, first.StatusCode);
         Assert.Equal(System.Net.HttpStatusCode.OK, replay.StatusCode);
-        await WaitUntilAsync(() => _authentication.SetCalls == 1 && _authentication.LastValidDate is not null);
+        await WaitUntilAsync(async () =>
+        {
+            await using var pollingConnection = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+            return await pollingConnection.ExecuteScalarAsync<string>("SELECT status FROM payment.payment_order WHERE id=100") == "ACTIVATED";
+        });
 
         await using var connection = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        Assert.Equal(1, _authentication.SetCalls);
+        Assert.NotNull(_authentication.LastValidDate);
         Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.payment_transaction WHERE provider_reference='reference-1'"));
         Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.outbox_message WHERE order_id=100"));
         Assert.Equal("ACTIVATED", await connection.ExecuteScalarAsync<string>("SELECT status FROM payment.payment_order WHERE id=100"));
@@ -115,7 +124,35 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
         Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
         await using var connection = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
         Assert.Equal(0, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.payment_transaction WHERE provider_reference='reference-2'"));
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.outbox_message WHERE order_id=100"));
         Assert.Equal("PENDING", await connection.ExecuteScalarAsync<string>("SELECT status FROM payment.payment_order WHERE id=100"));
+        Assert.Equal(0, _authentication.SetCalls);
+    }
+
+    [Fact]
+    public async Task Outbox_insert_failure_rolls_back_transaction_and_order_transition()
+    {
+        const long orderCode = 777777;
+        await SeedPendingOrderAsync(orderCode, 99, "payment-link-3", 52_000, "MONTHLY");
+        await using (var setup = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync())
+        {
+            await setup.ExecuteAsync("""
+                CREATE FUNCTION payment.reject_outbox_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN RAISE EXCEPTION 'injected outbox failure'; END $$;
+                CREATE TRIGGER reject_outbox_insert BEFORE INSERT ON payment.outbox_message
+                FOR EACH ROW EXECUTE FUNCTION payment.reject_outbox_insert();
+                """);
+        }
+        var webhook = await CreateSignedWebhookAsync(orderCode, 52_000, "payment-link-3", "reference-3");
+
+        using var response = await SendWebhookAsync(webhook);
+
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        await using var connection = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.payment_transaction WHERE provider_reference='reference-3'"));
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.outbox_message WHERE order_id=100"));
+        Assert.Equal("PENDING", await connection.ExecuteScalarAsync<string>("SELECT status FROM payment.payment_order WHERE id=100"));
+        Assert.Equal(0, _authentication.SetCalls);
     }
 
     private async Task SeedPendingOrderAsync(long orderCode, long userId, string paymentLinkId, long amount, string plan)
@@ -131,7 +168,6 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
 
     private static Task<Webhook> CreateSignedWebhookAsync(long orderCode, long amount, string paymentLinkId, string reference)
     {
-        const string checksumKey = "test-checksum-key";
         var data = new WebhookData
         {
             OrderCode = orderCode,
@@ -155,7 +191,7 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
         {
             ClientId = "test-client",
             ApiKey = "test-api-key",
-            ChecksumKey = checksumKey
+            ChecksumKey = ChecksumKey
         });
         return Task.FromResult(new Webhook
         {
@@ -163,7 +199,7 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
             Description = "success",
             Success = true,
             Data = data,
-            Signature = client.Crypto.CreateSignatureFromObject(data, checksumKey) ??
+            Signature = client.Crypto.CreateSignatureFromObject(data, ChecksumKey) ??
                         throw new InvalidOperationException("PayOS SDK did not create a test signature.")
         });
     }
@@ -178,10 +214,10 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
         return await _client.SendAsync(request);
     }
 
-    private static async Task WaitUntilAsync(Func<bool> condition)
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
     {
         var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
-        while (!condition())
+        while (!await condition())
         {
             if (DateTimeOffset.UtcNow >= deadline) throw new TimeoutException("Activation worker did not finish in time.");
             await Task.Delay(100);
