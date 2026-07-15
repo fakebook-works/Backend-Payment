@@ -107,6 +107,21 @@ public sealed class PaymentRepositoryIntegrationTests : IAsyncLifetime
         Assert.Equal(PaymentOrderStatus.Failed, stored?.Status);
     }
 
+    [Fact]
+    public async Task Reconciliation_can_cancel_only_a_created_or_pending_order()
+    {
+        var repository = new PaymentRepository(_dataSource, new SnowflakeIdGenerator(7));
+        var order = await repository.CreateOrderAsync(5, PremiumPlanCatalogue.Get(PremiumPlanCode.Monthly),
+            DateTimeOffset.UtcNow.AddMinutes(30), CancellationToken.None);
+        await repository.MarkCheckoutPendingAsync(order.Id, "cancel-link", "https://pay.payos.vn/example", CancellationToken.None);
+
+        await repository.MarkOrderCancelledAsync(order.Id, CancellationToken.None);
+        await repository.MarkOrderCancelledAsync(order.Id, CancellationToken.None);
+
+        var stored = await repository.GetOwnedOrderAsync(5, order.OrderCode, CancellationToken.None);
+        Assert.Equal(PaymentOrderStatus.Cancelled, stored?.Status);
+    }
+
     public async Task DisposeAsync()
     {
         await _dataSource.DisposeAsync();

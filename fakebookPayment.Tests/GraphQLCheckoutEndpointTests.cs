@@ -119,6 +119,92 @@ public sealed class GraphQLCheckoutEndpointTests : IAsyncLifetime
         Assert.Equal("PENDING", order.GetProperty("status").GetString());
     }
 
+    [Fact]
+    public async Task Trusted_owner_can_reconcile_a_cancelled_payos_return()
+    {
+        const long userId = 77;
+        await using (var connection = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync())
+        {
+            await connection.ExecuteAsync("""
+                INSERT INTO payment.payment_order
+                  (id, order_code, user_id, plan, amount, currency, status, provider_payment_link_id, checkout_url, expires_at)
+                VALUES (300, 123456, @UserId, 'MONTHLY', 52000, 'VND', 'PENDING', 'cancel-link',
+                        'https://pay.payos.vn/test', now() + interval '30 minutes');
+                """, new { UserId = userId });
+        }
+        _provider.PaymentLink = new ProviderPaymentLink(123456, 52_000, "cancel-link", ProviderPaymentLinkStatus.Cancelled);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/graphql")
+        {
+            Content = JsonContent.Create(new
+            {
+                query = "mutation($orderCode: ID!) { reconcilePremiumCheckout(orderCode: $orderCode) { orderCode status } }",
+                variables = new { orderCode = "123456" }
+            })
+        };
+        request.Headers.Add("X-Gateway-Secret", GatewaySecret);
+        request.Headers.Add("X-User-Id", userId.ToString());
+
+        using var response = await _client.SendAsync(request);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+
+        var order = body.RootElement.GetProperty("data").GetProperty("reconcilePremiumCheckout");
+        Assert.Equal("CANCELLED", order.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Reconciliation_rejects_an_untrusted_gateway()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/graphql")
+        {
+            Content = JsonContent.Create(new
+            {
+                query = "mutation($orderCode: ID!) { reconcilePremiumCheckout(orderCode: $orderCode) { orderCode status } }",
+                variables = new { orderCode = "123456" }
+            })
+        };
+        request.Headers.Add("X-Gateway-Secret", "wrong-secret");
+        request.Headers.Add("X-User-Id", "77");
+
+        using var response = await _client.SendAsync(request);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+
+        Assert.Equal("UNAUTHENTICATED",
+            body.RootElement.GetProperty("errors")[0].GetProperty("extensions").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Reconciliation_returns_a_safe_error_when_provider_identity_mismatches()
+    {
+        const long userId = 78;
+        await using (var connection = await _factory.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync())
+        {
+            await connection.ExecuteAsync("""
+                INSERT INTO payment.payment_order
+                  (id, order_code, user_id, plan, amount, currency, status, provider_payment_link_id, checkout_url, expires_at)
+                VALUES (301, 123457, @UserId, 'MONTHLY', 52000, 'VND', 'PENDING', 'expected-link',
+                        'https://pay.payos.vn/test', now() + interval '30 minutes');
+                """, new { UserId = userId });
+        }
+        _provider.PaymentLink = new ProviderPaymentLink(123457, 52_000, "wrong-link", ProviderPaymentLinkStatus.Cancelled);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/graphql")
+        {
+            Content = JsonContent.Create(new
+            {
+                query = "mutation($orderCode: ID!) { reconcilePremiumCheckout(orderCode: $orderCode) { orderCode status } }",
+                variables = new { orderCode = "123457" }
+            })
+        };
+        request.Headers.Add("X-Gateway-Secret", GatewaySecret);
+        request.Headers.Add("X-User-Id", userId.ToString());
+
+        using var response = await _client.SendAsync(request);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+
+        var error = body.RootElement.GetProperty("errors")[0];
+        Assert.Equal("PAYMENT_PROVIDER_INVALID_RESPONSE", error.GetProperty("extensions").GetProperty("code").GetString());
+        Assert.DoesNotContain("wrong-link", error.GetProperty("message").GetString());
+    }
+
     private static HttpRequestMessage CreateGraphQLRequest(string secret, string userId)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/graphql")
@@ -143,11 +229,14 @@ public sealed class GraphQLCheckoutEndpointTests : IAsyncLifetime
     private sealed class FakeProvider : IPayOSPaymentProvider
     {
         public PaymentOrder? ReceivedOrder { get; private set; }
+        public ProviderPaymentLink? PaymentLink { get; set; }
         public Task<ProviderCheckout> CreateCheckoutAsync(PaymentOrder order, CancellationToken cancellationToken)
         {
             ReceivedOrder = order;
             return Task.FromResult(new ProviderCheckout("checkout-link", "https://pay.payos.vn/checkout-test"));
         }
+        public Task<ProviderPaymentLink> GetPaymentLinkAsync(long orderCode, CancellationToken cancellationToken) =>
+            Task.FromResult(PaymentLink ?? new ProviderPaymentLink(orderCode, 500_000, "checkout-link", ProviderPaymentLinkStatus.Pending));
         public Task<VerifiedPayment> VerifyWebhookAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 

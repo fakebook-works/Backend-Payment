@@ -50,3 +50,17 @@ The frontend may show a cancelled or processing message from return parameters, 
 - GraphQL tests cover authenticated reconciliation and safe error codes.
 - Frontend tests cover documented success/cancel query strings, URL cleanup, and forged `PAID` input.
 - Existing webhook, checkout, activation, and frontend tests continue to pass.
+- The production frontend image serves `/premium/payment` and PayOS query strings through the SPA entry point with HTTP 200.
+- The production Payment image contains `/app/schema.sql` so database initialization can run at startup.
+
+## §B Bug History
+
+- B1|2026-07-15|production Nginx had no SPA fallback, so PayOS returns to `/premium/payment` produced HTTP 404|V1
+- B2|2026-07-15|`schema.sql` was not included in `dotnet publish`, so the Payment container restarted during database initialization|V2
+- B3|2026-07-15|checkout URLs pre-populated non-PayOS query parameters and the frontend did not reconcile documented Return URL data|V3
+
+## §V Invariants
+
+- V1: A production GET of `/premium/payment` with documented PayOS query parameters returns the SPA entry point with HTTP 200 and opens the Premium section.
+- V2: Every production Payment image contains `/app/schema.sql` before the service entry point starts.
+- V3: Return URL parameters are hints only; cancellation requires `PaymentRequests.GetAsync(orderCode)`, while payment and Premium activation require a successful `Webhooks.VerifyAsync()` result.

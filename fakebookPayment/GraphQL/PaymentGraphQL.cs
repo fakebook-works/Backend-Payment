@@ -56,6 +56,28 @@ public sealed class Query
 
 public sealed class Mutation
 {
+    public async Task<PremiumOrderView> ReconcilePremiumCheckout(
+        [ID] string orderCode,
+        [Service] IGatewayRequestContextAccessor gateway,
+        [Service] PremiumPaymentService payments,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var order = await payments.ReconcileCheckoutAsync(gateway.GetRequired().UserId, orderCode, cancellationToken);
+            return new PremiumOrderView(order.OrderCode.ToString(), order.Plan, checked((int)order.Amount), order.Status,
+                order.CreatedAt, order.ExpiresAt, order.PaidAt, order.TargetValidDate);
+        }
+        catch (PremiumPaymentException exception)
+        {
+            throw new GraphQLException(ErrorBuilder.New().SetMessage(exception.Message).SetCode(exception.Code).Build());
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw new GraphQLException(ErrorBuilder.New().SetMessage("Unauthorized.").SetCode("UNAUTHENTICATED").Build());
+        }
+    }
+
     public async Task<PremiumCheckoutPayload> CreatePremiumCheckout(
         CreatePremiumCheckoutInput input,
         [Service] IGatewayRequestContextAccessor gateway,

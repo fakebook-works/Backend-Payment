@@ -66,6 +66,40 @@ public sealed class PremiumPaymentService(
             throw new PremiumPaymentException("PREMIUM_ORDER_NOT_FOUND", "Không tìm thấy giao dịch Premium.");
     }
 
+    public async Task<PaymentOrder> ReconcileCheckoutAsync(long userId, string orderCode, CancellationToken ct)
+    {
+        var order = await GetOrderAsync(userId, orderCode, ct);
+        if (order.Status is PaymentOrderStatus.Cancelled or PaymentOrderStatus.Expired or PaymentOrderStatus.Failed or
+            PaymentOrderStatus.Paid or PaymentOrderStatus.ActivationPending or PaymentOrderStatus.Activated)
+            return order;
+        if (string.IsNullOrWhiteSpace(order.ProviderPaymentLinkId))
+            throw new PremiumPaymentException("PAYMENT_PROVIDER_UNAVAILABLE", "Chưa thể đối soát giao dịch lúc này.");
+
+        ProviderPaymentLink paymentLink;
+        try
+        {
+            paymentLink = await payOS.GetPaymentLinkAsync(order.OrderCode, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch
+        {
+            throw new PremiumPaymentException("PAYMENT_PROVIDER_UNAVAILABLE", "Chưa thể đối soát giao dịch lúc này.");
+        }
+
+        if (paymentLink.OrderCode != order.OrderCode || paymentLink.Amount != order.Amount ||
+            !string.Equals(paymentLink.PaymentLinkId, order.ProviderPaymentLinkId, StringComparison.Ordinal))
+            throw new PremiumPaymentException("PAYMENT_PROVIDER_INVALID_RESPONSE", "Thông tin giao dịch không khớp.");
+
+        if (paymentLink.Status == ProviderPaymentLinkStatus.Cancelled)
+        {
+            await repository.MarkOrderCancelledAsync(order.Id, ct);
+            return await repository.GetOwnedOrderAsync(userId, order.OrderCode, ct) ??
+                throw new PremiumPaymentException("PREMIUM_ORDER_NOT_FOUND", "Không tìm thấy giao dịch Premium.");
+        }
+
+        return order;
+    }
+
     private static PremiumCheckoutPayload ToPayload(PaymentOrder order) =>
         new(order.OrderCode.ToString(), order.Status, order.CheckoutUrl!);
 }

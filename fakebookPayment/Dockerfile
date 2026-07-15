@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:8.0.422 AS build
 WORKDIR /src
 COPY fakebookPayment/fakebookPayment.csproj fakebookPayment/
 RUN dotnet restore fakebookPayment/fakebookPayment.csproj
@@ -12,4 +12,3 @@ ENV ASPNETCORE_URLS=http://+:5016
 EXPOSE 5016
 USER app
 ENTRYPOINT ["dotnet", "fakebookPayment.dll"]
-

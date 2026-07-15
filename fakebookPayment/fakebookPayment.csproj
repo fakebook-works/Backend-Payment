@@ -15,4 +15,8 @@
     <PackageReference Include="payOS" Version="2.1.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="schema.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

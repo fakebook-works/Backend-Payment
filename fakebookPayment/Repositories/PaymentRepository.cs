@@ -23,6 +23,7 @@ public interface IPaymentRepository
     Task<PaymentOrder> CreateOrderAsync(long userId, PremiumPlan plan, DateTimeOffset expiresAt, CancellationToken cancellationToken);
     Task MarkCheckoutPendingAsync(long orderId, string paymentLinkId, string checkoutUrl, CancellationToken cancellationToken);
     Task MarkOrderFailedAsync(long orderId, CancellationToken cancellationToken);
+    Task MarkOrderCancelledAsync(long orderId, CancellationToken cancellationToken);
     Task<PaymentOrder?> GetOwnedOrderAsync(long userId, long orderCode, CancellationToken cancellationToken);
     Task<PaymentOrder?> GetUnfinishedOrderAsync(long userId, CancellationToken cancellationToken);
     Task ExpireStaleOrdersAsync(long userId, CancellationToken cancellationToken);
@@ -49,7 +50,12 @@ public sealed class PaymentRepository(NpgsqlDataSource dataSource, IIdGenerator 
         await using var connection = await dataSource.OpenConnectionAsync(ct);
         var row = await connection.QuerySingleAsync<OrderRow>(new CommandDefinition(sql, new
         {
-            Id = ids.NextId(), UserId = userId, Plan = ToDb(plan.Code), plan.Amount, plan.Currency, ExpiresAt = expiresAt
+            Id = ids.NextId(),
+            UserId = userId,
+            Plan = ToDb(plan.Code),
+            plan.Amount,
+            plan.Currency,
+            ExpiresAt = expiresAt
         }, cancellationToken: ct));
         return Map(row);
     }
@@ -66,6 +72,10 @@ public sealed class PaymentRepository(NpgsqlDataSource dataSource, IIdGenerator 
 
     public Task MarkOrderFailedAsync(long orderId, CancellationToken ct) => ExecuteAsync(
         "UPDATE payment.payment_order SET status = 'FAILED', updated_at = now() WHERE id = @OrderId AND status = 'CREATED';",
+        new { OrderId = orderId }, ct);
+
+    public Task MarkOrderCancelledAsync(long orderId, CancellationToken ct) => ExecuteAsync(
+        "UPDATE payment.payment_order SET status = 'CANCELLED', updated_at = now() WHERE id = @OrderId AND status IN ('CREATED','PENDING');",
         new { OrderId = orderId }, ct);
 
     public Task<PaymentOrder?> GetOwnedOrderAsync(long userId, long orderCode, CancellationToken ct) => QueryOrderAsync(
@@ -114,11 +124,17 @@ public sealed class PaymentRepository(NpgsqlDataSource dataSource, IIdGenerator 
                     @ProviderCode, @ProviderDescription, @PaidAt)
             ON CONFLICT DO NOTHING RETURNING id;
             """, new
-            {
-                Id = ids.NextId(), OrderId = row.Id, payment.Reference, payment.PaymentLinkId, payment.Amount,
-                payment.Currency, ProviderCode = payment.ProviderCode[..Math.Min(payment.ProviderCode.Length, 32)],
-                ProviderDescription = payment.ProviderDescription[..Math.Min(payment.ProviderDescription.Length, 255)], payment.PaidAt
-            },
+        {
+            Id = ids.NextId(),
+            OrderId = row.Id,
+            payment.Reference,
+            payment.PaymentLinkId,
+            payment.Amount,
+            payment.Currency,
+            ProviderCode = payment.ProviderCode[..Math.Min(payment.ProviderCode.Length, 32)],
+            ProviderDescription = payment.ProviderDescription[..Math.Min(payment.ProviderDescription.Length, 255)],
+            payment.PaidAt
+        },
             transaction, cancellationToken: ct));
         if (inserted is null)
         {
@@ -170,8 +186,12 @@ public sealed class PaymentRepository(NpgsqlDataSource dataSource, IIdGenerator 
         var row = await connection.QuerySingleOrDefaultAsync<OutboxRow>(new CommandDefinition(sql, cancellationToken: ct));
         return row is null ? null : new OutboxMessage
         {
-            Id = row.Id, OrderId = row.OrderId, UserId = row.UserId, Plan = ParsePlan(row.Plan),
-            TargetValidDate = row.TargetValidDate, AttemptCount = row.AttemptCount
+            Id = row.Id,
+            OrderId = row.OrderId,
+            UserId = row.UserId,
+            Plan = ParsePlan(row.Plan),
+            TargetValidDate = row.TargetValidDate,
+            AttemptCount = row.AttemptCount
         };
     }
 
@@ -232,10 +252,21 @@ public sealed class PaymentRepository(NpgsqlDataSource dataSource, IIdGenerator 
         string.Concat(value.ToLowerInvariant().Split('_').Select(static x => char.ToUpperInvariant(x[0]) + x[1..])));
     private static PaymentOrder Map(OrderRow row) => new()
     {
-        Id = row.Id, OrderCode = row.OrderCode, UserId = row.UserId, Plan = ParsePlan(row.Plan), Amount = row.Amount,
-        Currency = row.Currency, Status = ParseStatus(row.Status), ProviderPaymentLinkId = row.ProviderPaymentLinkId,
-        CheckoutUrl = row.CheckoutUrl, ExpiresAt = row.ExpiresAt, PaidAt = row.PaidAt, ActivatedAt = row.ActivatedAt,
-        TargetValidDate = row.TargetValidDate, CreatedAt = row.CreatedAt, UpdatedAt = row.UpdatedAt
+        Id = row.Id,
+        OrderCode = row.OrderCode,
+        UserId = row.UserId,
+        Plan = ParsePlan(row.Plan),
+        Amount = row.Amount,
+        Currency = row.Currency,
+        Status = ParseStatus(row.Status),
+        ProviderPaymentLinkId = row.ProviderPaymentLinkId,
+        CheckoutUrl = row.CheckoutUrl,
+        ExpiresAt = row.ExpiresAt,
+        PaidAt = row.PaidAt,
+        ActivatedAt = row.ActivatedAt,
+        TargetValidDate = row.TargetValidDate,
+        CreatedAt = row.CreatedAt,
+        UpdatedAt = row.UpdatedAt
     };
 
     private sealed class OrderRow

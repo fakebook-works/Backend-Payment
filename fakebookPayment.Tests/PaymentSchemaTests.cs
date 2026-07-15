@@ -17,6 +17,7 @@ public sealed class PaymentSchemaTests
         Assert.Contains("premiumPlans", schema);
         Assert.Contains("premiumOrder", schema);
         Assert.Contains("createPremiumCheckout", schema);
+        Assert.Contains("reconcilePremiumCheckout", schema);
         Assert.Contains("durationMonths: Int!", schema);
         Assert.Contains("orderCode: ID!", schema);
         Assert.Contains("enum PremiumPlan", schema);

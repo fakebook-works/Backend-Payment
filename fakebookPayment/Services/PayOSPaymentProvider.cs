@@ -11,10 +11,13 @@ using PayOS.Models.Webhooks;
 namespace Fakebook.Payment.Services;
 
 public sealed record ProviderCheckout(string PaymentLinkId, string CheckoutUrl);
+public enum ProviderPaymentLinkStatus { Pending, Processing, Paid, Cancelled, Expired, Failed, Underpaid }
+public sealed record ProviderPaymentLink(long OrderCode, long Amount, string PaymentLinkId, ProviderPaymentLinkStatus Status);
 
 public interface IPayOSPaymentProvider
 {
     Task<ProviderCheckout> CreateCheckoutAsync(PaymentOrder order, CancellationToken cancellationToken);
+    Task<ProviderPaymentLink> GetPaymentLinkAsync(long orderCode, CancellationToken cancellationToken);
     Task<VerifiedPayment> VerifyWebhookAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken);
 }
 
@@ -45,8 +48,8 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
             OrderCode = order.OrderCode,
             Amount = order.Amount,
             Description = $"FB PRM {order.OrderCode}",
-            ReturnUrl = $"{baseUrl}/premium/payment?result=success&orderCode={order.OrderCode}",
-            CancelUrl = $"{baseUrl}/premium/payment?result=cancelled&orderCode={order.OrderCode}",
+            ReturnUrl = $"{baseUrl}/premium/payment",
+            CancelUrl = $"{baseUrl}/premium/payment",
             ExpiredAt = order.ExpiresAt.ToUnixTimeSeconds()
         };
         var response = await _client.PaymentRequests.CreateAsync(request, new RequestOptions<CreatePaymentLinkRequest>
@@ -58,6 +61,32 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
             !Uri.TryCreate(response.CheckoutUrl, UriKind.Absolute, out var checkoutUri) || checkoutUri.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException("PayOS returned an incomplete checkout response.");
         return new(response.PaymentLinkId, response.CheckoutUrl);
+    }
+
+    public async Task<ProviderPaymentLink> GetPaymentLinkAsync(long orderCode, CancellationToken cancellationToken)
+    {
+        var response = await _client.PaymentRequests.GetAsync(orderCode, new RequestOptions
+        {
+            CancellationToken = cancellationToken
+        });
+        return MapPaymentLink(orderCode, response);
+    }
+
+    internal static ProviderPaymentLink MapPaymentLink(long expectedOrderCode, PaymentLink response)
+    {
+        if (response.OrderCode != expectedOrderCode || response.Amount <= 0 || string.IsNullOrWhiteSpace(response.Id))
+            throw new InvalidOperationException("PayOS returned an incomplete payment-link response.");
+        return new(response.OrderCode, response.Amount, response.Id, response.Status switch
+        {
+            PaymentLinkStatus.Pending => ProviderPaymentLinkStatus.Pending,
+            PaymentLinkStatus.Processing => ProviderPaymentLinkStatus.Processing,
+            PaymentLinkStatus.Paid => ProviderPaymentLinkStatus.Paid,
+            PaymentLinkStatus.Cancelled => ProviderPaymentLinkStatus.Cancelled,
+            PaymentLinkStatus.Expired => ProviderPaymentLinkStatus.Expired,
+            PaymentLinkStatus.Failed => ProviderPaymentLinkStatus.Failed,
+            PaymentLinkStatus.Underpaid => ProviderPaymentLinkStatus.Underpaid,
+            _ => throw new InvalidOperationException("PayOS returned an unsupported payment-link status.")
+        });
     }
 
     public async Task<VerifiedPayment> VerifyWebhookAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
