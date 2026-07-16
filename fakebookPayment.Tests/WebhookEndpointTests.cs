@@ -42,14 +42,18 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
                     ["Gateway:SharedSecret"] = GatewaySecret,
                     ["Authentication:Endpoint"] = "http://localhost:59999/graphql",
                     ["Authentication:PaymentSecret"] = "11234567890123456789012345678901",
-                    ["Payment:PublicBaseUrl"] = "http://localhost:3000",
-                    ["Payment:FrontendPublicUrl"] = "http://localhost:3000"
+                    ["SocialGraph:BaseUrl"] = "http://localhost:59998",
+                    ["SocialGraph:InternalSecret"] = "21234567890123456789012345678901",
+            ["Payment:PublicBaseUrl"] = "http://localhost:3001",
+            ["Payment:FrontendPublicUrl"] = "http://localhost:3001"
                 }));
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IAuthenticationClient>();
+                services.RemoveAll<ISocialGraphPremiumClient>();
                 services.RemoveAll<TimeProvider>();
                 services.AddSingleton<IAuthenticationClient>(_authentication);
+                services.AddSingleton<ISocialGraphPremiumClient, TestSocialGraphPremiumClient>();
                 services.AddSingleton<TimeProvider>(new FixedTimeProvider(FixedNow));
             });
         });
@@ -258,13 +262,13 @@ public sealed class WebhookEndpointTests : IAsyncLifetime
         public ConcurrentQueue<DateTimeOffset> Targets { get; } = new();
         public DateTimeOffset? LastValidDate => Targets.TryPeek(out var value) ? value : null;
         public Task<DateTimeOffset?> GetValidDateAsync(long userId, CancellationToken cancellationToken) => Task.FromResult<DateTimeOffset?>(null);
-        public Task SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken)
+        public Task<DateTimeOffset> SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken)
         {
             Targets.Enqueue(validDate);
             Interlocked.Increment(ref _setCalls);
             if (Interlocked.Decrement(ref _failuresRemaining) >= 0)
                 throw new HttpRequestException("Injected Authentication outage.");
-            return Task.CompletedTask;
+            return Task.FromResult(validDate);
         }
     }
 

@@ -9,6 +9,7 @@
 - PayOS webhook reaches `/internal/webhooks/payos` through the Gateway proxy.
 - Payment owns its order, transaction, and outbox tables.
 - Authentication remains the sole owner of `fb.id_user.valid_date`.
+- SocialGraph remains the sole owner of the public profile verification expiry.
 - There is no automatic renewal. An expired account starts a new checkout.
 
 ## Premium plans
@@ -24,6 +25,11 @@ Set the variables from `.env.example` in your local secret manager. Never copy P
 
 Use separate random secrets of at least 32 bytes for Gateway→Payment and Payment→Authentication.
 Keep `Payment__PaymentsEnabled=false` until Authentication, Gateway composition, and the PayOS webhook proxy are deployed and verified.
+
+Premium activation is complete only after the outbox worker idempotently updates both
+Authentication's `validDate` and SocialGraph's profile verification expiry. Configure
+`SocialGraph__BaseUrl` and `SocialGraph__InternalSecret` independently from the
+Gateway and Payment-to-Authentication secrets.
 
 ## Run
 

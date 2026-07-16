@@ -32,11 +32,36 @@ public sealed class AuthenticationClientTests
         var handler = new RecordingHandler("""{"data":{"setPaymentValidDate":{"userId":"42","validDate":"2026-08-13T12:00:00Z"}}}""");
         var client = Create(handler);
 
-        await client.SetValidDateAsync(42, target, CancellationToken.None);
+        var stored = await client.SetValidDateAsync(42, target, CancellationToken.None);
+
+        Assert.Equal(target, stored);
 
         using var request = JsonDocument.Parse(handler.RequestBody!);
         Assert.Equal("42", request.RootElement.GetProperty("variables").GetProperty("input").GetProperty("userId").GetString());
         Assert.Equal(target, request.RootElement.GetProperty("variables").GetProperty("input").GetProperty("validDate").GetDateTimeOffset());
+    }
+
+    [Fact]
+    public async Task Valid_date_update_returns_the_later_authoritative_authentication_value()
+    {
+        var target = new DateTimeOffset(2026, 8, 13, 12, 0, 0, TimeSpan.Zero);
+        var later = target.AddMonths(2);
+        var responseJson = JsonSerializer.Serialize(new
+        {
+            data = new
+            {
+                setPaymentValidDate = new
+                {
+                    userId = "42",
+                    validDate = later
+                }
+            }
+        });
+        var client = Create(new RecordingHandler(responseJson));
+
+        var stored = await client.SetValidDateAsync(42, target, CancellationToken.None);
+
+        Assert.Equal(later, stored);
     }
 
     [Fact]

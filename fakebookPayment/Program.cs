@@ -15,6 +15,7 @@ builder.Services.AddOptions<PaymentOptions>().BindConfiguration(PaymentOptions.S
 builder.Services.AddOptions<PayOSOptions>().BindConfiguration(PayOSOptions.SectionName).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddOptions<GatewayOptions>().BindConfiguration(GatewayOptions.SectionName).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddOptions<AuthenticationOptions>().BindConfiguration(AuthenticationOptions.SectionName).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddOptions<SocialGraphOptions>().BindConfiguration(SocialGraphOptions.SectionName).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddOptions<NpgsqlOptions>().Configure<IConfiguration>((options, configuration) =>
 {
     options.ConnectionString = configuration.GetConnectionString("PaymentDatabase") ?? string.Empty;
@@ -33,6 +34,7 @@ builder.Services.AddScoped<IGatewayRequestContextAccessor, GatewayRequestContext
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddSingleton<IPayOSPaymentProvider, PayOSPaymentProvider>();
 builder.Services.AddHttpClient<IAuthenticationClient, AuthenticationClient>(client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddHttpClient<ISocialGraphPremiumClient, SocialGraphPremiumClient>(client => client.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddScoped<PremiumPaymentService>();
 builder.Services.AddHostedService<DatabaseInitializer>();
 builder.Services.AddHostedService<PremiumActivationWorker>();

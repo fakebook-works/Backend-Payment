@@ -25,10 +25,10 @@ fakebookGateway/Gateway/schema/Payment/schema-settings.json
   },
   "environments": {
     "Development": {
-      "PAYMENT_URL": "http://localhost:5016/graphql"
+      "PAYMENT_URL": "http://localhost:1007/graphql"
     },
     "Production": {
-      "PAYMENT_URL": "http://payment:5016/graphql"
+      "PAYMENT_URL": "http://payment:1007/graphql"
     }
   }
 }
@@ -50,7 +50,7 @@ POST /api/webhooks/payos
 Proxy raw bytes to:
 
 ```text
-POST http://payment:5016/internal/webhooks/payos
+POST http://payment:1007/internal/webhooks/payos
 ```
 
 Requirements:

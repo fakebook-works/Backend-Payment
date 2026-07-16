@@ -8,7 +8,7 @@ namespace Fakebook.Payment.Services;
 public interface IAuthenticationClient
 {
     Task<DateTimeOffset?> GetValidDateAsync(long userId, CancellationToken cancellationToken);
-    Task SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken);
+    Task<DateTimeOffset> SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken);
 }
 
 public sealed class AuthenticationClient(HttpClient httpClient, IOptions<AuthenticationOptions> options) : IAuthenticationClient
@@ -34,7 +34,10 @@ public sealed class AuthenticationClient(HttpClient httpClient, IOptions<Authent
             : state.GetProperty("validDate").GetDateTimeOffset();
     }
 
-    public async Task SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken)
+    public async Task<DateTimeOffset> SetValidDateAsync(
+        long userId,
+        DateTimeOffset validDate,
+        CancellationToken cancellationToken)
     {
         using var document = await SendAsync(SetMutation, new { input = new { userId = userId.ToString(), validDate } }, cancellationToken);
         var state = document.RootElement.GetProperty("data").GetProperty("setPaymentValidDate");
@@ -42,6 +45,7 @@ public sealed class AuthenticationClient(HttpClient httpClient, IOptions<Authent
         var storedValidDate = state.GetProperty("validDate").GetDateTimeOffset();
         if (storedValidDate < validDate)
             throw new InvalidOperationException("Authentication did not persist the requested Premium validity.");
+        return storedValidDate;
     }
 
     private async Task<JsonDocument> SendAsync(string query, object variables, CancellationToken cancellationToken)

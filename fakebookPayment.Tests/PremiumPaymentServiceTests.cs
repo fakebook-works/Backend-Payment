@@ -159,7 +159,7 @@ public sealed class PremiumPaymentServiceTests
     {
         public DateTimeOffset? ValidDate { get; init; }
         public Task<DateTimeOffset?> GetValidDateAsync(long userId, CancellationToken cancellationToken) => Task.FromResult(ValidDate);
-        public Task SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<DateTimeOffset> SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken) => Task.FromResult(validDate);
     }
 
     private sealed class FakeProvider : IPayOSPaymentProvider

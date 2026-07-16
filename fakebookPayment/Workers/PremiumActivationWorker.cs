@@ -18,6 +18,7 @@ public sealed class PremiumActivationWorker(
                 using var scope = scopeFactory.CreateScope();
                 var repository = scope.ServiceProvider.GetRequiredService<IPaymentRepository>();
                 var authentication = scope.ServiceProvider.GetRequiredService<IAuthenticationClient>();
+                var socialGraph = scope.ServiceProvider.GetRequiredService<ISocialGraphPremiumClient>();
                 var message = await repository.LeaseNextOutboxAsync(stoppingToken);
                 if (message is null)
                 {
@@ -37,7 +38,11 @@ public sealed class PremiumActivationWorker(
                         targetValidDate = await repository.SetActivationTargetAsync(message,
                             PremiumValidityCalculator.Calculate(timeProvider.GetUtcNow(), currentValidDate, message.Plan), stoppingToken);
                     }
-                    await authentication.SetValidDateAsync(message.UserId, targetValidDate.Value, stoppingToken);
+                    var persistedValidDate = await authentication.SetValidDateAsync(
+                        message.UserId,
+                        targetValidDate.Value,
+                        stoppingToken);
+                    await socialGraph.SetVerifyUntilAsync(message.UserId, persistedValidDate, stoppingToken);
                     await repository.CompleteActivationAsync(message, stoppingToken);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }

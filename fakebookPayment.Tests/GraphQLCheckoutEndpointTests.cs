@@ -38,16 +38,20 @@ public sealed class GraphQLCheckoutEndpointTests : IAsyncLifetime
                     ["Gateway:SharedSecret"] = GatewaySecret,
                     ["Authentication:Endpoint"] = "http://localhost:59999/graphql",
                     ["Authentication:PaymentSecret"] = "11234567890123456789012345678901",
-                    ["Payment:PublicBaseUrl"] = "http://localhost:5016",
-                    ["Payment:FrontendPublicUrl"] = "http://localhost:3000",
+                    ["SocialGraph:BaseUrl"] = "http://localhost:59998",
+                    ["SocialGraph:InternalSecret"] = "21234567890123456789012345678901",
+            ["Payment:PublicBaseUrl"] = "http://localhost:1007",
+            ["Payment:FrontendPublicUrl"] = "http://localhost:3001",
                     ["Payment:PaymentsEnabled"] = "true"
                 }));
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IPayOSPaymentProvider>();
                 services.RemoveAll<IAuthenticationClient>();
+                services.RemoveAll<ISocialGraphPremiumClient>();
                 services.AddSingleton<IPayOSPaymentProvider>(_provider);
                 services.AddSingleton<IAuthenticationClient, InactiveAuthentication>();
+                services.AddSingleton<ISocialGraphPremiumClient, TestSocialGraphPremiumClient>();
             });
         });
         _client = _factory.CreateClient();
@@ -243,6 +247,6 @@ public sealed class GraphQLCheckoutEndpointTests : IAsyncLifetime
     private sealed class InactiveAuthentication : IAuthenticationClient
     {
         public Task<DateTimeOffset?> GetValidDateAsync(long userId, CancellationToken cancellationToken) => Task.FromResult<DateTimeOffset?>(null);
-        public Task SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<DateTimeOffset> SetValidDateAsync(long userId, DateTimeOffset validDate, CancellationToken cancellationToken) => Task.FromResult(validDate);
     }
 }

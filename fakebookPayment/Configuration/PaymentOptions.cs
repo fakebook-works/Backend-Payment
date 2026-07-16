@@ -32,3 +32,10 @@ public sealed class AuthenticationOptions
     [Required, Url] public string Endpoint { get; init; } = string.Empty;
     [Required, MinLength(32)] public string PaymentSecret { get; init; } = string.Empty;
 }
+
+public sealed class SocialGraphOptions
+{
+    public const string SectionName = "SocialGraph";
+    [Required, Url] public string BaseUrl { get; init; } = string.Empty;
+    [Required, MinLength(32)] public string InternalSecret { get; init; } = string.Empty;
+}

@@ -8,7 +8,7 @@ RUN dotnet publish fakebookPayment/fakebookPayment.csproj -c Release -o /app/pub
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 COPY --from=build /app/publish .
-ENV ASPNETCORE_URLS=http://+:5016
-EXPOSE 5016
+ENV ASPNETCORE_URLS=http://+:1007
+EXPOSE 1007
 USER app
 ENTRYPOINT ["dotnet", "fakebookPayment.dll"]
