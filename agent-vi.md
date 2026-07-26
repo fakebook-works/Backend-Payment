@@ -11,7 +11,7 @@
 - `dotnet restore fakebookPayment.sln` khôi phục các gói NuGet.
 - `dotnet build fakebookPayment.sln --no-restore` biên dịch dịch vụ và dự án kiểm thử.
 - `dotnet test fakebookPayment.sln` chạy toàn bộ kiểm thử xUnit; Docker phải hoạt động để chạy các kiểm thử PostgreSQL Testcontainers.
-- `dotnet run --project fakebookPayment/fakebookPayment.csproj` chạy API cục bộ trên cổng `5016`.
+- `dotnet run --project fakebookPayment/fakebookPayment.csproj` chạy API cục bộ trên cổng `1007`.
 - `dotnet test fakebookPayment.Tests/fakebookPayment.Tests.csproj --filter FullyQualifiedName~PremiumPaymentServiceTests` chạy riêng một lớp kiểm thử.
 
 ## Quy tắc Viết mã & Đặt tên

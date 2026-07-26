@@ -37,7 +37,7 @@ Gateway and Payment-to-Authentication secrets.
 dotnet run --project .\fakebookPayment\fakebookPayment.csproj
 ```
 
-The service uses port `5016`. Startup applies the idempotent `schema.sql` to its Payment database.
+The service uses port `1007`. Startup applies the idempotent `schema.sql` to its Payment database.
 
 - GraphQL: `/graphql`
 - PayOS webhook (internal): `/internal/webhooks/payos`

@@ -11,7 +11,7 @@
 - `dotnet restore fakebookPayment.sln` restores NuGet dependencies.
 - `dotnet build fakebookPayment.sln --no-restore` compiles the service and tests.
 - `dotnet test fakebookPayment.sln` runs all xUnit tests; Docker must be available for PostgreSQL Testcontainers tests.
-- `dotnet run --project fakebookPayment/fakebookPayment.csproj` starts the API locally on port `5016`.
+- `dotnet run --project fakebookPayment/fakebookPayment.csproj` starts the API locally on port `1007`.
 - `dotnet test fakebookPayment.Tests/fakebookPayment.Tests.csproj --filter FullyQualifiedName~PremiumPaymentServiceTests` runs a focused test class.
 
 ## Coding Style & Naming Conventions
