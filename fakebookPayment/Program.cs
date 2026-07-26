@@ -11,6 +11,8 @@ using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddInternalRequestSigning(builder.Configuration);
+
 builder.Services.AddOptions<PaymentOptions>().BindConfiguration(PaymentOptions.SectionName).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddOptions<PayOSOptions>().BindConfiguration(PayOSOptions.SectionName).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddOptions<GatewayOptions>().BindConfiguration(GatewayOptions.SectionName).ValidateDataAnnotations().ValidateOnStart();
@@ -34,7 +36,9 @@ builder.Services.AddScoped<IGatewayRequestContextAccessor, GatewayRequestContext
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddSingleton<IPayOSPaymentProvider, PayOSPaymentProvider>();
 builder.Services.AddHttpClient<IAuthenticationClient, AuthenticationClient>(client => client.Timeout = TimeSpan.FromSeconds(10));
-builder.Services.AddHttpClient<ISocialGraphPremiumClient, SocialGraphPremiumClient>(client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services
+    .AddHttpClient<ISocialGraphPremiumClient, SocialGraphPremiumClient>(client => client.Timeout = TimeSpan.FromSeconds(10))
+    .AddHttpMessageHandler<InternalRequestSigningHandler>();
 builder.Services.AddScoped<PremiumPaymentService>();
 builder.Services.AddHostedService<DatabaseInitializer>();
 builder.Services.AddHostedService<PremiumActivationWorker>();
