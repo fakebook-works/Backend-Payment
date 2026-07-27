@@ -10,6 +10,7 @@ using Npgsql;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddFakebookServiceDefaults(builder.Configuration, "fakebook-payment");
 
 builder.Services.AddInternalRequestSigning(builder.Configuration);
 
@@ -40,7 +41,10 @@ builder.Services
     .AddHttpClient<ISocialGraphPremiumClient, SocialGraphPremiumClient>(client => client.Timeout = TimeSpan.FromSeconds(10))
     .AddHttpMessageHandler<InternalRequestSigningHandler>();
 builder.Services.AddScoped<PremiumPaymentService>();
-builder.Services.AddHostedService<DatabaseInitializer>();
+if (builder.Configuration.GetValue("Database:ApplySchemaOnStartup", true))
+{
+    builder.Services.AddHostedService<DatabaseInitializer>();
+}
 builder.Services.AddHostedService<PremiumActivationWorker>();
 builder.Services.AddRateLimiter(options =>
 {
