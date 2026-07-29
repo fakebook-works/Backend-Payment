@@ -1,8 +1,19 @@
-.git
-.gitignore
-.env*
-**/bin
-**/obj
-TestResults
-artifacts
+.git/
+.github/
+.idea/
+.vscode/
+.vs/
+**/bin/
+**/obj/
+**/TestResults/
+**/coverage/
+fakebookPayment.Tests/
+artifacts/
+*.log
+*.suo
+*.user
+.env
+.env.*
+appsettings.Local.json
+**/secrets.json
 

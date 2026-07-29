@@ -8,7 +8,9 @@ RUN dotnet publish fakebookPayment/fakebookPayment.csproj -c Release -o /app/pub
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 # Health probes need an HTTP client; the Debian runtime image ships none.
-RUN apt-get update && apt-get install -y --no-install-recommends curl \n    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/publish .
 ENV ASPNETCORE_URLS=http://+:1007
 EXPOSE 1007
