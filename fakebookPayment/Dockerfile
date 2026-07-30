@@ -7,8 +7,9 @@ RUN dotnet publish fakebookPayment/fakebookPayment.csproj -c Release -o /app/pub
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS runtime
 WORKDIR /app
-# Health probes need an HTTP client.
-RUN apk add --no-cache curl
+# Health probes need an HTTP client. Npgsql loads GSSAPI dynamically even when
+# password authentication is used.
+RUN apk add --no-cache curl krb5-libs
 COPY --from=build /app/publish .
 ENV ASPNETCORE_URLS=http://+:1007
 EXPOSE 1007
