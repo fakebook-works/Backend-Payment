@@ -1,4 +1,6 @@
 using Dapper;
+using Fakebook.Payment.Workers;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Testcontainers.PostgreSql;
 
@@ -27,8 +29,10 @@ public sealed class SchemaMigrationTests
               (11, 1, 'legacy-reference-2', 'legacy-link-2', 52000, 'VND', now());
             """);
 
-        var schemaPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "fakebookPayment", "schema.sql"));
-        await connection.ExecuteAsync(await File.ReadAllTextAsync(schemaPath));
+        await using var secondConnection = await dataSource.OpenConnectionAsync();
+        await Task.WhenAll(
+            PaymentDatabaseMigrator.MigrateAsync(connection, NullLogger.Instance),
+            PaymentDatabaseMigrator.MigrateAsync(secondConnection, NullLogger.Instance));
 
         var userType = await connection.ExecuteScalarAsync<string>("""
             SELECT data_type FROM information_schema.columns
@@ -46,6 +50,7 @@ public sealed class SchemaMigrationTests
         Assert.Equal(2, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.payment_transaction WHERE order_id = 1"));
         Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.payment_transaction WHERE order_id = 1 AND is_canonical"));
         Assert.Equal(4, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM pg_constraint WHERE conrelid='payment.payment_order'::regclass AND conname IN ('ck_payment_order_plan','ck_payment_order_amount','ck_payment_order_currency','ck_payment_order_status')"));
+        Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT count(*) FROM payment.schema_migrations"));
     }
 
     private const string LegacySchema = """

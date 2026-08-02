@@ -24,6 +24,10 @@
 
   <ItemGroup>
     <None Update="schema.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="schema.sql"
+                      LogicalName="Fakebook.Payment.Database.Migrations.2026071501_InitialAndLegacyReconciliation.sql" />
+    <EmbeddedResource Include="Database/Migrations/*.sql"
+                      LogicalName="Fakebook.Payment.Database.Migrations.%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

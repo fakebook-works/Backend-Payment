@@ -2,6 +2,8 @@ using Dapper;
 using Fakebook.Payment.Models;
 using Fakebook.Payment.Repositories;
 using Fakebook.Payment.Services;
+using Fakebook.Payment.Workers;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Testcontainers.PostgreSql;
 
@@ -21,10 +23,8 @@ public sealed class PaymentRepositoryIntegrationTests : IAsyncLifetime
     {
         await _postgres.StartAsync();
         _dataSource = NpgsqlDataSource.Create(_postgres.GetConnectionString());
-        var schemaPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "fakebookPayment", "schema.sql"));
-        var schema = await File.ReadAllTextAsync(schemaPath);
         await using var connection = await _dataSource.OpenConnectionAsync();
-        await connection.ExecuteAsync(schema);
+        await PaymentDatabaseMigrator.MigrateAsync(connection, NullLogger.Instance);
     }
 
     [Fact]

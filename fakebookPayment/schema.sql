@@ -55,8 +55,8 @@ CREATE TABLE IF NOT EXISTS payment.outbox_message (
 CREATE INDEX IF NOT EXISTS ix_outbox_ready ON payment.outbox_message (next_attempt_at, created_at) WHERE processed_at IS NULL;
 
 -- Reconcile databases initialized by pre-release drafts. These statements are
--- idempotent and intentionally remain alongside the baseline schema because
--- this service self-hosts and applies schema.sql at startup.
+-- idempotent and intentionally remain in this immutable initial migration so
+-- databases created by older pre-release builds can adopt the versioned ledger.
 DROP INDEX IF EXISTS payment.ux_payment_order_user_unfinished;
 
 ALTER TABLE payment.payment_order

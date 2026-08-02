@@ -37,7 +37,15 @@ Gateway and Payment-to-Authentication secrets.
 dotnet run --project .\fakebookPayment\fakebookPayment.csproj
 ```
 
-The service uses port `1007`. Startup applies the idempotent `schema.sql` to its Payment database.
+The service uses port `1007`. Startup automatically applies embedded, versioned SQL
+migrations to its Payment database. It serializes concurrent replicas with a PostgreSQL
+advisory lock, records version/checksum state in `payment.schema_migrations`, and aborts
+startup on any migration error. Set `ConnectionStrings__PaymentMigrationDatabase` to a
+DDL-capable migration role; when omitted, it falls back to `PaymentDatabase` for backward
+compatibility. Set `Database__ApplySchemaOnStartup=false` only when a separate release job
+has already applied the same migrations. Applied migration resources are immutable; add a
+new `<version>_<name>.sql` resource under `Database/Migrations` for later changes.
+`Database__MigrationCommandTimeoutSeconds` defaults to 300 and accepts 1–3600 seconds.
 
 - GraphQL: `/graphql`
 - PayOS webhook (internal): `/internal/webhooks/payos`
