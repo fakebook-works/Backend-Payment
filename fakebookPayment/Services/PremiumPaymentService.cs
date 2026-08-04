@@ -97,6 +97,27 @@ public sealed class PremiumPaymentService(
                 throw new PremiumPaymentException("PREMIUM_ORDER_NOT_FOUND", "Không tìm thấy giao dịch Premium.");
         }
 
+        if (paymentLink.Status == ProviderPaymentLinkStatus.Paid)
+        {
+            if (paymentLink.PaidEvidence is null)
+                throw new PremiumPaymentException("PAYMENT_PROVIDER_INVALID_RESPONSE", "Provider payment evidence does not match this order.");
+
+            var found = await repository.RecordVerifiedPaymentAsync(new VerifiedPayment(
+                order.OrderCode,
+                order.Amount,
+                order.Currency,
+                paymentLink.PaidEvidence.Reference,
+                paymentLink.PaymentLinkId,
+                "00",
+                "Authenticated PayOS payment-link reconciliation",
+                paymentLink.PaidEvidence.PaidAt), ct);
+            if (!found)
+                throw new PremiumPaymentException("PREMIUM_ORDER_NOT_FOUND", "Premium order was not found.");
+
+            return await repository.GetOwnedOrderAsync(userId, order.OrderCode, ct) ??
+                throw new PremiumPaymentException("PREMIUM_ORDER_NOT_FOUND", "Premium order was not found.");
+        }
+
         return order;
     }
 

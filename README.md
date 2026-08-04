@@ -30,8 +30,12 @@ Set `Payment__RegisterWebhookOnStartup=true` in the production Payment container
 are enabled, the background registrar confirms `${Payment__PublicBaseUrl}/api/webhooks/payos`
 with PayOS and retries transient startup/routing failures without blocking service readiness.
 The public origin must be HTTPS and route `/api/` to Gateway. A successful browser return alone
-never activates Premium; only the signed webhook creates the payment transaction and activation
-outbox entry.
+never activates Premium. The normal path is the signed webhook. If that webhook is missed, the
+authenticated `reconcilePremiumCheckout` mutation may recover a `PAID` order only from the SDK-
+verified PayOS payment-link response after requiring exact order/link/amount identity,
+`amountPaid == amount`, `amountRemaining == 0`, and a complete transaction total; it writes through
+the same idempotent transaction and activation outbox repository path. Browser query parameters are
+never used as payment evidence.
 Only one authoritative deployment should enable registration for a shared PayOS merchant account;
 development environments must not overwrite the production callback with a different public origin.
 

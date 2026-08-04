@@ -12,7 +12,13 @@ namespace Fakebook.Payment.Services;
 
 public sealed record ProviderCheckout(string PaymentLinkId, string CheckoutUrl);
 public enum ProviderPaymentLinkStatus { Pending, Processing, Paid, Cancelled, Expired, Failed, Underpaid }
-public sealed record ProviderPaymentLink(long OrderCode, long Amount, string PaymentLinkId, ProviderPaymentLinkStatus Status);
+public sealed record ProviderPaidEvidence(string Reference, DateTimeOffset PaidAt);
+public sealed record ProviderPaymentLink(
+    long OrderCode,
+    long Amount,
+    string PaymentLinkId,
+    ProviderPaymentLinkStatus Status,
+    ProviderPaidEvidence? PaidEvidence = null);
 
 public interface IPayOSPaymentProvider
 {
@@ -87,7 +93,7 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
     {
         if (response.OrderCode != expectedOrderCode || response.Amount <= 0 || string.IsNullOrWhiteSpace(response.Id))
             throw new InvalidOperationException("PayOS returned an incomplete payment-link response.");
-        return new(response.OrderCode, response.Amount, response.Id, response.Status switch
+        var status = response.Status switch
         {
             PaymentLinkStatus.Pending => ProviderPaymentLinkStatus.Pending,
             PaymentLinkStatus.Processing => ProviderPaymentLinkStatus.Processing,
@@ -97,7 +103,45 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
             PaymentLinkStatus.Failed => ProviderPaymentLinkStatus.Failed,
             PaymentLinkStatus.Underpaid => ProviderPaymentLinkStatus.Underpaid,
             _ => throw new InvalidOperationException("PayOS returned an unsupported payment-link status.")
-        });
+        };
+
+        ProviderPaidEvidence? paidEvidence = null;
+        if (status == ProviderPaymentLinkStatus.Paid)
+        {
+            if (response.AmountPaid != response.Amount || response.AmountRemaining != 0 ||
+                response.Transactions is not { Count: > 0 })
+                throw new InvalidOperationException("PayOS returned incomplete paid-payment evidence.");
+
+            long transactionTotal = 0;
+            DateTimeOffset? paidAt = null;
+            foreach (var transaction in response.Transactions)
+            {
+                if (transaction.Amount <= 0 || string.IsNullOrWhiteSpace(transaction.Reference))
+                    throw new InvalidOperationException("PayOS returned an invalid paid transaction.");
+                try
+                {
+                    transactionTotal = checked(transactionTotal + transaction.Amount);
+                }
+                catch (OverflowException)
+                {
+                    throw new InvalidOperationException("PayOS returned an invalid paid transaction total.");
+                }
+
+                var transactionPaidAt = ParsePaymentLinkTimestamp(transaction.TransactionDateTime);
+                if (paidAt is null || transactionPaidAt > paidAt)
+                    paidAt = transactionPaidAt;
+            }
+
+            if (transactionTotal != response.AmountPaid || paidAt is null)
+                throw new InvalidOperationException("PayOS returned inconsistent paid-payment evidence.");
+
+            var reference = response.Transactions.Count == 1
+                ? response.Transactions[0].Reference
+                : $"payos-link:{response.Id}";
+            paidEvidence = new ProviderPaidEvidence(reference, paidAt.Value);
+        }
+
+        return new(response.OrderCode, response.Amount, response.Id, status, paidEvidence);
     }
 
     public async Task<VerifiedPayment> VerifyWebhookAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
@@ -121,5 +165,17 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
                 DateTimeStyles.None, out var timestamp))
             throw new InvalidOperationException("PayOS returned an invalid transaction timestamp.");
         return new DateTimeOffset(DateTime.SpecifyKind(timestamp, DateTimeKind.Unspecified), TimeSpan.FromHours(7)).ToUniversalTime();
+    }
+
+    private static DateTimeOffset ParsePaymentLinkTimestamp(string value)
+    {
+        if (DateTime.TryParseExact(value, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var payOSTimestamp))
+            return new DateTimeOffset(DateTime.SpecifyKind(payOSTimestamp, DateTimeKind.Unspecified),
+                TimeSpan.FromHours(7)).ToUniversalTime();
+        if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal, out var timestamp))
+            return timestamp.ToUniversalTime();
+        throw new InvalidOperationException("PayOS returned an invalid payment-link transaction timestamp.");
     }
 }

@@ -72,7 +72,7 @@ public sealed class PremiumPaymentServiceTests
     }
 
     [Fact]
-    public async Task Paid_provider_status_stays_pending_until_a_verified_webhook_arrives()
+    public async Task Paid_provider_status_records_authenticated_provider_evidence()
     {
         var repository = new FakeRepository
         {
@@ -80,14 +80,35 @@ public sealed class PremiumPaymentServiceTests
         };
         var provider = new FakeProvider
         {
-            PaymentLink = new ProviderPaymentLink(1, 52_000, "link-1", ProviderPaymentLinkStatus.Paid)
+            PaymentLink = new ProviderPaymentLink(1, 52_000, "link-1", ProviderPaymentLinkStatus.Paid,
+                new ProviderPaidEvidence("reference-1", Now.AddMinutes(2)))
         };
         var service = Create(repository, provider, new FakeAuthentication());
 
         var result = await service.ReconcileCheckoutAsync(42, "1", CancellationToken.None);
 
         Assert.False(repository.Cancelled);
-        Assert.Equal(PaymentOrderStatus.Pending, result.Status);
+        Assert.NotNull(repository.VerifiedPayment);
+        Assert.Equal("reference-1", repository.VerifiedPayment.Reference);
+        Assert.Equal(PaymentOrderStatus.Paid, result.Status);
+    }
+
+    [Fact]
+    public async Task Paid_provider_status_without_verified_evidence_changes_no_state()
+    {
+        var repository = new FakeRepository { OwnedOrder = PendingOrder(42) };
+        var provider = new FakeProvider
+        {
+            PaymentLink = new ProviderPaymentLink(1, 52_000, "link-1", ProviderPaymentLinkStatus.Paid)
+        };
+        var service = Create(repository, provider, new FakeAuthentication());
+
+        var error = await Assert.ThrowsAsync<PremiumPaymentException>(() =>
+            service.ReconcileCheckoutAsync(42, "1", CancellationToken.None));
+
+        Assert.Equal("PAYMENT_PROVIDER_INVALID_RESPONSE", error.Code);
+        Assert.Null(repository.VerifiedPayment);
+        Assert.Equal(PaymentOrderStatus.Pending, repository.OwnedOrder?.Status);
     }
 
     [Theory]
@@ -186,6 +207,7 @@ public sealed class PremiumPaymentServiceTests
         public DateTimeOffset? CreatedExpiresAt { get; private set; }
         public bool Failed { get; private set; }
         public bool Cancelled { get; private set; }
+        public VerifiedPayment? VerifiedPayment { get; private set; }
         public PaymentOrder? OwnedOrder { get; set; }
         public Task<PaymentOrder> CreateOrderAsync(long userId, PremiumPlan plan, DateTimeOffset expiresAt, CancellationToken cancellationToken)
         {
@@ -232,7 +254,30 @@ public sealed class PremiumPaymentServiceTests
         }
         public Task<PaymentOrder?> GetUnfinishedOrderAsync(long userId, CancellationToken cancellationToken) => Task.FromResult<PaymentOrder?>(null);
         public Task ExpireStaleOrdersAsync(long userId, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task<bool> RecordVerifiedPaymentAsync(VerifiedPayment payment, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> RecordVerifiedPaymentAsync(VerifiedPayment payment, CancellationToken cancellationToken)
+        {
+            VerifiedPayment = payment;
+            if (OwnedOrder is not null)
+            {
+                OwnedOrder = new PaymentOrder
+                {
+                    Id = OwnedOrder.Id,
+                    OrderCode = OwnedOrder.OrderCode,
+                    UserId = OwnedOrder.UserId,
+                    Plan = OwnedOrder.Plan,
+                    Amount = OwnedOrder.Amount,
+                    Currency = OwnedOrder.Currency,
+                    Status = PaymentOrderStatus.Paid,
+                    ProviderPaymentLinkId = OwnedOrder.ProviderPaymentLinkId,
+                    CheckoutUrl = OwnedOrder.CheckoutUrl,
+                    ExpiresAt = OwnedOrder.ExpiresAt,
+                    PaidAt = payment.PaidAt,
+                    CreatedAt = OwnedOrder.CreatedAt,
+                    UpdatedAt = Now
+                };
+            }
+            return Task.FromResult(true);
+        }
         public Task<OutboxMessage?> LeaseNextOutboxAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IAsyncDisposable?> TryAcquireUserLockAsync(long userId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<DateTimeOffset> SetActivationTargetAsync(OutboxMessage message, DateTimeOffset targetValidDate, CancellationToken cancellationToken) => throw new NotSupportedException();
