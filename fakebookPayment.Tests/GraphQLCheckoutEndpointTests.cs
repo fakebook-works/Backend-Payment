@@ -234,6 +234,7 @@ public sealed class GraphQLCheckoutEndpointTests : IAsyncLifetime
     {
         public PaymentOrder? ReceivedOrder { get; private set; }
         public ProviderPaymentLink? PaymentLink { get; set; }
+        public Task ConfirmWebhookAsync(string webhookUrl, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<ProviderCheckout> CreateCheckoutAsync(PaymentOrder order, CancellationToken cancellationToken)
         {
             ReceivedOrder = order;

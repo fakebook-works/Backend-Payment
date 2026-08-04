@@ -8,6 +8,7 @@ public sealed class PaymentOptions
     [Required, Url] public string PublicBaseUrl { get; init; } = string.Empty;
     [Required, Url] public string FrontendPublicUrl { get; init; } = string.Empty;
     public bool PaymentsEnabled { get; init; }
+    public bool RegisterWebhookOnStartup { get; init; }
     [Range(1, 120)] public int CheckoutTtlMinutes { get; init; } = 30;
     [Range(0, 1023)] public int WorkerId { get; init; } = 1;
 }

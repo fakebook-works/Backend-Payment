@@ -16,6 +16,7 @@ public sealed record ProviderPaymentLink(long OrderCode, long Amount, string Pay
 
 public interface IPayOSPaymentProvider
 {
+    Task ConfirmWebhookAsync(string webhookUrl, CancellationToken cancellationToken);
     Task<ProviderCheckout> CreateCheckoutAsync(PaymentOrder order, CancellationToken cancellationToken);
     Task<ProviderPaymentLink> GetPaymentLinkAsync(long orderCode, CancellationToken cancellationToken);
     Task<VerifiedPayment> VerifyWebhookAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken);
@@ -37,6 +38,16 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
             ChecksumKey = options.ChecksumKey,
             TimeoutMs = 15_000,
             MaxRetries = 2
+        });
+    }
+
+    public async Task ConfirmWebhookAsync(string webhookUrl, CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(webhookUrl, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("The public PayOS webhook URL must use HTTPS.");
+        await _client.Webhooks.ConfirmAsync(webhookUrl, new RequestOptions<ConfirmWebhookRequest>
+        {
+            CancellationToken = cancellationToken
         });
     }
 

@@ -26,6 +26,15 @@ Set the variables from `.env.example` in your local secret manager. Never copy P
 Use separate random secrets of at least 32 bytes for Gateway→Payment and Payment→Authentication.
 Keep `Payment__PaymentsEnabled=false` until Authentication, Gateway composition, and the PayOS webhook proxy are deployed and verified.
 
+Set `Payment__RegisterWebhookOnStartup=true` in the production Payment container. When payments
+are enabled, the background registrar confirms `${Payment__PublicBaseUrl}/api/webhooks/payos`
+with PayOS and retries transient startup/routing failures without blocking service readiness.
+The public origin must be HTTPS and route `/api/` to Gateway. A successful browser return alone
+never activates Premium; only the signed webhook creates the payment transaction and activation
+outbox entry.
+Only one authoritative deployment should enable registration for a shared PayOS merchant account;
+development environments must not overwrite the production callback with a different public origin.
+
 Premium activation is complete only after the outbox worker idempotently updates both
 Authentication's `validDate` and SocialGraph's profile verification expiry. Configure
 `SocialGraph__BaseUrl` and `SocialGraph__InternalSecret` independently from the

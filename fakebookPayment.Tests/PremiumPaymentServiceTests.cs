@@ -167,6 +167,7 @@ public sealed class PremiumPaymentServiceTests
         public Exception? Failure { get; init; }
         public ProviderPaymentLink? PaymentLink { get; init; }
         public PaymentOrder? ReceivedOrder { get; private set; }
+        public Task ConfirmWebhookAsync(string webhookUrl, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<ProviderCheckout> CreateCheckoutAsync(PaymentOrder order, CancellationToken cancellationToken)
         {
             ReceivedOrder = order;

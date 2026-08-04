@@ -46,6 +46,7 @@ if (builder.Configuration.GetValue("Database:ApplySchemaOnStartup", true))
     builder.Services.AddHostedService<DatabaseInitializer>();
 }
 builder.Services.AddHostedService<PremiumActivationWorker>();
+builder.Services.AddHostedService<PayOSWebhookRegistrationWorker>();
 builder.Services.AddRateLimiter(options =>
 {
     options.AddPolicy("payos-webhook", context => RateLimitPartition.GetFixedWindowLimiter(
