@@ -37,6 +37,26 @@ public sealed class GatewayRequestContextTests
         Create(http).EnsureTrustedGateway();
     }
 
+    [Fact]
+    public void Duplicate_identity_headers_are_rejected_and_metadata_is_sanitized()
+    {
+        var duplicate = new DefaultHttpContext();
+        duplicate.Request.Headers["X-Gateway-Secret"] = Secret;
+        duplicate.Request.Headers.Append("X-User-Id", "1");
+        duplicate.Request.Headers.Append("X-User-Id", "2");
+        Assert.Throws<UnauthorizedAccessException>(() => Create(duplicate).GetRequired());
+
+        var unsafeMetadata = new DefaultHttpContext { TraceIdentifier = "safe-trace" };
+        unsafeMetadata.Request.Headers["X-Gateway-Secret"] = Secret;
+        unsafeMetadata.Request.Headers["X-User-Id"] = "1";
+        unsafeMetadata.Request.Headers["X-Correlation-Id"] = "bad\u202Etrace";
+        unsafeMetadata.Request.Headers["X-Session-Id"] = new string('x', 129);
+
+        var result = Create(unsafeMetadata).GetRequired();
+        Assert.Equal("safe-trace", result.CorrelationId);
+        Assert.Null(result.SessionId);
+    }
+
     private static GatewayRequestContextAccessor Create(HttpContext context) => new(
         new HttpContextAccessor { HttpContext = context },
         Options.Create(new GatewayOptions { SharedSecret = Secret }));

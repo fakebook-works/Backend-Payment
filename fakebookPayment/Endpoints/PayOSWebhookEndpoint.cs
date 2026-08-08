@@ -28,7 +28,7 @@ public static class PayOSWebhookEndpoint
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        if (!SecretComparer.FixedTimeEquals(context.Request.Headers["X-Gateway-Secret"], gateway.Value.SharedSecret))
+        if (!SecretComparer.FixedTimeEqualsHeader(context.Request.Headers["X-Gateway-Secret"], gateway.Value.SharedSecret))
             return Results.Unauthorized();
         var mediaType = context.Request.ContentType?.Split(';', 2)[0].Trim();
         if (!string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase))

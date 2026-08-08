@@ -16,7 +16,7 @@ public sealed class GatewayRequestContextAccessor(IHttpContextAccessor accessor,
     public void EnsureTrustedGateway()
     {
         var context = accessor.HttpContext ?? throw new UnauthorizedAccessException("Missing HTTP context.");
-        if (!SecretComparer.FixedTimeEquals(context.Request.Headers["X-Gateway-Secret"], options.Value.SharedSecret))
+        if (!SecretComparer.FixedTimeEqualsHeader(context.Request.Headers["X-Gateway-Secret"], options.Value.SharedSecret))
             throw new UnauthorizedAccessException("Untrusted gateway request.");
     }
 
@@ -25,13 +25,32 @@ public sealed class GatewayRequestContextAccessor(IHttpContextAccessor accessor,
         EnsureTrustedGateway();
         var context = accessor.HttpContext!;
 
-        var rawUserId = context.Request.Headers["X-User-Id"].ToString().Trim();
-        if (!long.TryParse(rawUserId, out var userId) || userId <= 0)
+        var userValues = context.Request.Headers["X-User-Id"];
+        var rawUserId = userValues.Count == 1 ? userValues[0] : null;
+        if (string.IsNullOrEmpty(rawUserId) || rawUserId.Length > 19 ||
+            rawUserId.Any(character => character is < '0' or > '9') ||
+            !long.TryParse(rawUserId, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var userId) || userId <= 0)
             throw new UnauthorizedAccessException("Missing trusted user identity.");
 
-        var correlationId = context.Request.Headers["X-Correlation-Id"].ToString().Trim();
-        if (string.IsNullOrEmpty(correlationId) || correlationId.Length > 128) correlationId = context.TraceIdentifier;
-        var sessionId = context.Request.Headers["X-Session-Id"].ToString().Trim();
-        return new(userId, string.IsNullOrEmpty(sessionId) ? null : sessionId, correlationId);
+        var correlationValues = context.Request.Headers["X-Correlation-Id"];
+        var correlationId = correlationValues.Count == 1 ? correlationValues[0] : null;
+        if (string.IsNullOrEmpty(correlationId) || correlationId.Length > 128 ||
+            correlationId.Any(character =>
+                !char.IsAsciiLetterOrDigit(character) &&
+                character is not '-' and not '_' and not '.' and not ':' and not '/'))
+        {
+            correlationId = context.TraceIdentifier;
+        }
+
+        var sessionValues = context.Request.Headers["X-Session-Id"];
+        var sessionId = sessionValues.Count == 1 ? sessionValues[0] : null;
+        if (string.IsNullOrEmpty(sessionId) || sessionId.Length > 128 ||
+            sessionId.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_'))
+        {
+            sessionId = null;
+        }
+
+        return new(userId, sessionId, correlationId!);
     }
 }

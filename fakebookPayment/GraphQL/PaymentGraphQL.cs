@@ -36,6 +36,8 @@ public sealed class Query
         [Service] PremiumPaymentService payments,
         CancellationToken cancellationToken)
     {
+        if (!OrderCodeValidator.TryParse(orderCode, out _))
+            throw new GraphQLException(ErrorBuilder.New().SetMessage("Invalid order code.").SetCode("BAD_USER_INPUT").Build());
         try
         {
             var order = await payments.GetOrderAsync(gateway.GetRequired().UserId, orderCode, cancellationToken);
@@ -62,6 +64,8 @@ public sealed class Mutation
         [Service] PremiumPaymentService payments,
         CancellationToken cancellationToken)
     {
+        if (!OrderCodeValidator.TryParse(orderCode, out _))
+            throw new GraphQLException(ErrorBuilder.New().SetMessage("Invalid order code.").SetCode("BAD_USER_INPUT").Build());
         try
         {
             var order = await payments.ReconcileCheckoutAsync(gateway.GetRequired().UserId, orderCode, cancellationToken);

@@ -61,7 +61,7 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("graphql", context =>
     {
         var gatewaySecret = context.RequestServices.GetRequiredService<IOptions<GatewayOptions>>().Value.SharedSecret;
-        var trusted = SecretComparer.FixedTimeEquals(context.Request.Headers["X-Gateway-Secret"], gatewaySecret);
+        var trusted = SecretComparer.FixedTimeEqualsHeader(context.Request.Headers["X-Gateway-Secret"], gatewaySecret);
         var userId = context.Request.Headers["X-User-Id"].ToString();
         var partitionKey = trusted && long.TryParse(userId, out var parsedUserId)
             ? $"user:{parsedUserId}"

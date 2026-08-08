@@ -1,6 +1,7 @@
 using Fakebook.Payment.Models;
 using Fakebook.Payment.Security;
 using Fakebook.Payment.Services;
+using Microsoft.Extensions.Primitives;
 
 namespace fakebookPayment.Tests;
 
@@ -25,6 +26,9 @@ public sealed class DomainTests
         Assert.False(SecretComparer.FixedTimeEquals(null, expected));
         Assert.False(SecretComparer.FixedTimeEquals("wrong", expected));
         Assert.False(SecretComparer.FixedTimeEquals("11234567890123456789012345678901", expected));
+        Assert.False(SecretComparer.FixedTimeEqualsHeader(
+            new StringValues([expected, expected]),
+            expected));
         Assert.True(SecretComparer.FixedTimeEquals(expected, expected));
     }
 
@@ -43,5 +47,15 @@ public sealed class DomainTests
         var now = new DateTimeOffset(2026, 1, 31, 0, 0, 0, TimeSpan.Zero);
         Assert.Equal(now.AddMonths(1), PremiumValidityCalculator.Calculate(now, now.AddDays(-1), PremiumPlanCode.Monthly));
         Assert.Equal(now.AddMonths(13), PremiumValidityCalculator.Calculate(now, now.AddMonths(1), PremiumPlanCode.Yearly));
+    }
+
+    [Theory]
+    [InlineData("9007199254740991", true)]
+    [InlineData("9007199254740992", false)]
+    [InlineData("9999999999999999999", false)]
+    [InlineData("+1", false)]
+    public void Order_code_parser_enforces_the_positive_javascript_safe_range(string value, bool expected)
+    {
+        Assert.Equal(expected, OrderCodeValidator.TryParse(value, out _));
     }
 }

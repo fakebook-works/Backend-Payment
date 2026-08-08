@@ -1,6 +1,7 @@
 using Fakebook.Payment.Configuration;
 using Fakebook.Payment.Models;
 using Fakebook.Payment.Repositories;
+using Fakebook.Payment.Security;
 using Microsoft.Extensions.Options;
 
 namespace Fakebook.Payment.Services;
@@ -60,7 +61,7 @@ public sealed class PremiumPaymentService(
 
     public async Task<PaymentOrder> GetOrderAsync(long userId, string orderCode, CancellationToken ct)
     {
-        if (!long.TryParse(orderCode, out var parsed) || parsed is < 1 or > 9_007_199_254_740_991)
+        if (userId <= 0 || !OrderCodeValidator.TryParse(orderCode, out var parsed))
             throw new PremiumPaymentException("PREMIUM_ORDER_NOT_FOUND", "Không tìm thấy giao dịch Premium.");
         return await repository.GetOwnedOrderAsync(userId, parsed, ct) ??
             throw new PremiumPaymentException("PREMIUM_ORDER_NOT_FOUND", "Không tìm thấy giao dịch Premium.");

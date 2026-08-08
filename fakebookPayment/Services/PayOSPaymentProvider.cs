@@ -1,7 +1,9 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using Fakebook.Payment.Configuration;
 using Fakebook.Payment.Models;
+using Fakebook.Payment.Security;
 using Microsoft.Extensions.Options;
 using PayOS;
 using PayOS.Models;
@@ -30,6 +32,9 @@ public interface IPayOSPaymentProvider
 
 public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
 {
+    private const int MaxProviderIdentifierBytes = 256;
+    private const int MaxProviderDescriptionBytes = 255;
+    private const int MaxProviderTransactions = 100;
     private readonly PayOSClient _client;
     private readonly PaymentOptions _paymentOptions;
 
@@ -74,7 +79,8 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
             CancellationToken = cancellationToken
         });
         if (response.OrderCode != order.OrderCode || response.Amount != order.Amount ||
-            string.IsNullOrWhiteSpace(response.PaymentLinkId) || string.IsNullOrWhiteSpace(response.CheckoutUrl) ||
+            !IsSafeProviderText(response.PaymentLinkId, MaxProviderIdentifierBytes) ||
+            !IsSafeProviderText(response.CheckoutUrl, 2_048) ||
             !Uri.TryCreate(response.CheckoutUrl, UriKind.Absolute, out var checkoutUri) || checkoutUri.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException("PayOS returned an incomplete checkout response.");
         return new(response.PaymentLinkId, response.CheckoutUrl);
@@ -82,6 +88,8 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
 
     public async Task<ProviderPaymentLink> GetPaymentLinkAsync(long orderCode, CancellationToken cancellationToken)
     {
+        if (orderCode is < 1 or > OrderCodeValidator.MaximumOrderCode)
+            throw new ArgumentOutOfRangeException(nameof(orderCode));
         var response = await _client.PaymentRequests.GetAsync(orderCode, new RequestOptions
         {
             CancellationToken = cancellationToken
@@ -91,7 +99,9 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
 
     internal static ProviderPaymentLink MapPaymentLink(long expectedOrderCode, PaymentLink response)
     {
-        if (response.OrderCode != expectedOrderCode || response.Amount <= 0 || string.IsNullOrWhiteSpace(response.Id))
+        if (expectedOrderCode is < 1 or > OrderCodeValidator.MaximumOrderCode ||
+            response.OrderCode != expectedOrderCode || response.Amount <= 0 ||
+            !IsSafeProviderText(response.Id, MaxProviderIdentifierBytes))
             throw new InvalidOperationException("PayOS returned an incomplete payment-link response.");
         var status = response.Status switch
         {
@@ -109,14 +119,16 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
         if (status == ProviderPaymentLinkStatus.Paid)
         {
             if (response.AmountPaid != response.Amount || response.AmountRemaining != 0 ||
-                response.Transactions is not { Count: > 0 })
+                response.Transactions is not { Count: > 0 and <= MaxProviderTransactions })
                 throw new InvalidOperationException("PayOS returned incomplete paid-payment evidence.");
 
             long transactionTotal = 0;
             DateTimeOffset? paidAt = null;
             foreach (var transaction in response.Transactions)
             {
-                if (transaction.Amount <= 0 || string.IsNullOrWhiteSpace(transaction.Reference))
+                if (transaction.Amount <= 0 ||
+                    !IsSafeProviderText(transaction.Reference, MaxProviderIdentifierBytes) ||
+                    !IsSafeProviderText(transaction.TransactionDateTime, 64, allowSpaces: true))
                     throw new InvalidOperationException("PayOS returned an invalid paid transaction.");
                 try
                 {
@@ -149,14 +161,22 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
         cancellationToken.ThrowIfCancellationRequested();
         var webhook = JsonSerializer.Deserialize<Webhook>(body.Span, new JsonSerializerOptions
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
+            MaxDepth = 16
         }) ?? throw new InvalidOperationException("Invalid PayOS webhook JSON.");
         var data = await _client.Webhooks.VerifyAsync(webhook);
-        if (!webhook.Success || webhook.Code != "00" || data.Code != "00")
+        var providerDescription = NormalizeProviderDescription(data.Description2);
+        if (!webhook.Success || webhook.Code != "00" || data.Code != "00" ||
+            data.OrderCode is < 1 or > OrderCodeValidator.MaximumOrderCode ||
+            data.Amount <= 0 ||
+            !string.Equals(data.Currency, "VND", StringComparison.Ordinal) ||
+            !IsSafeProviderText(data.Reference, MaxProviderIdentifierBytes) ||
+            !IsSafeProviderText(data.PaymentLinkId, MaxProviderIdentifierBytes) ||
+            providerDescription is null)
             throw new InvalidOperationException("PayOS webhook is signed but does not represent a successful payment.");
         var paidAt = ParsePayOSTimestamp(data.TransactionDateTime);
         return new(data.OrderCode, data.Amount, data.Currency, data.Reference, data.PaymentLinkId,
-            data.Code, data.Description2, paidAt);
+            data.Code, providerDescription, paidAt);
     }
 
     private static DateTimeOffset ParsePayOSTimestamp(string value)
@@ -177,5 +197,71 @@ public sealed class PayOSPaymentProvider : IPayOSPaymentProvider
                 DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal, out var timestamp))
             return timestamp.ToUniversalTime();
         throw new InvalidOperationException("PayOS returned an invalid payment-link transaction timestamp.");
+    }
+
+    internal static string? NormalizeProviderDescription(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > MaxProviderDescriptionBytes * 2)
+            return null;
+
+        string normalized;
+        try
+        {
+            normalized = value.Normalize(NormalizationForm.FormC).Trim();
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+
+        if (normalized.Length == 0 || Encoding.UTF8.GetByteCount(normalized) > MaxProviderDescriptionBytes)
+            return null;
+
+        var combiningTotal = 0;
+        var combiningRun = 0;
+        foreach (var rune in normalized.EnumerateRunes())
+        {
+            var category = Rune.GetUnicodeCategory(rune);
+            if (category is UnicodeCategory.Control or UnicodeCategory.Format or
+                UnicodeCategory.Surrogate or UnicodeCategory.PrivateUse or
+                UnicodeCategory.OtherNotAssigned or UnicodeCategory.LineSeparator or
+                UnicodeCategory.ParagraphSeparator)
+                return null;
+
+            if (category is UnicodeCategory.NonSpacingMark or
+                UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark)
+            {
+                combiningTotal++;
+                combiningRun++;
+                if (combiningRun > 3 || combiningTotal > 32)
+                    return null;
+            }
+            else
+            {
+                combiningRun = 0;
+            }
+        }
+
+        return normalized;
+    }
+
+    private static bool IsSafeProviderText(
+        string? value,
+        int maximumUtf8Bytes,
+        bool allowSpaces = false)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Length > maximumUtf8Bytes ||
+            Encoding.UTF8.GetByteCount(value) > maximumUtf8Bytes)
+        {
+            return false;
+        }
+
+        // Provider identifiers, URLs and references are protocol metadata, not user
+        // prose. Restrict them to printable ASCII so malformed UTF-16, bidi controls,
+        // private-use glyphs and combining-heavy values can never reach persistence or
+        // a browser redirect.
+        var minimum = allowSpaces ? '\x20' : '\x21';
+        return value.All(character => character >= minimum && character <= '\x7e');
     }
 }
